@@ -1,0 +1,37 @@
+name: AI Daily News Bot
+
+on:
+  schedule:
+    # 07:30 Asia/Taipei == 23:30 UTC (previous day)
+    - cron: "30 23 * * *"
+  workflow_dispatch: {}  # 手動觸發
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Taipei
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+      LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run bot
+        run: node index.mjs
+
+      # 可選：如你想把每日生成的清單或Log回寫，也可在此加 commit 步驟
