@@ -6,7 +6,7 @@
 // 4) 禁止杜撰：只允許使用候選新聞清單
 
 import 'dotenv/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import Parser from 'rss-parser';
 
 const FEEDS = [
@@ -100,14 +100,16 @@ async function buildPost(items) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('缺少 GEMINI_API_KEY');
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
+  const ai = new GoogleGenAI({ apiKey });
 
   const dateStr = twDateStr();
   const candidates = items.map((it, i) =>
     `${i+1}. ${it.title}\n來源：${it.link}`).join('\n');
 
-  const prompt = `
+  const prompt = [{
+    role: "user",
+    parts: [{
+      text: `
 你是 AI 新聞編輯。從候選新聞中挑「5到8條」真正重要、與 AI 強相關的消息，
 用「繁體中文」輸出每日快訊。嚴格遵守【格式】與【規則】，不得杜撰。
 
@@ -132,10 +134,16 @@ ${candidates}
 - 【關鍵詞】為 2~6 字，可用：大型模型 AI法規 晶片 產品更新 投融資 安全治理 等。
 - 來源必須是該條「單篇文章的完整 URL」，不得使用首頁/搜尋/示範網址；保留原始 URL，不要超連結語法。
 - 僅輸出純文字，保留空一行的版面；不要多餘前言或附註。
-`.trim();
+`.trim()
+    }]
+  }];
 
-  const res = await model.generateContent(prompt);
-  const text = res.response?.text?.();
+  const resp = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+  });
+
+  const text = resp.text?.trim();
   if (!text) throw new Error('Gemini 無內容回傳');
   return text.trim();
 }
