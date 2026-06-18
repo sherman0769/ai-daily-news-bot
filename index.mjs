@@ -24,7 +24,54 @@ const FEEDS = [
 ];
 
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
+const GEMINI_RETRY_DELAYS_MS = [5000, 15000, 30000];
+const RETRYABLE_GEMINI_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getErrorSummary(e) {
+  const status = e?.status ?? e?.statusCode ?? e?.code ?? e?.response?.status;
+  const message = e?.message || String(e);
+  return status ? `${status} ${message}` : message;
+}
+
+function isRetryableGeminiError(e) {
+  const status = e?.status ?? e?.statusCode ?? e?.code ?? e?.response?.status;
+  const numericStatus = typeof status === 'string' ? Number(status) : status;
+  const message = e?.message || String(e);
+
+  return RETRYABLE_GEMINI_STATUS_CODES.has(numericStatus)
+    || /high demand|UNAVAILABLE|temporarily unavailable/i.test(message);
+}
+
+function buildGeminiFallbackPost(dateStr = twDateStr()) {
+  return `🌟 Li's Meet AI Studio每日重要快訊｜${dateStr} 🌟
+
+今日 AI 新聞整理服務暫時忙碌，系統稍後將恢復。請稍後再查看。`;
+}
+
+async function generateContentWithRetry(ai, request) {
+  for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await ai.models.generateContent(request);
+    } catch (e) {
+      const canRetry = isRetryableGeminiError(e);
+      if (!canRetry || attempt === GEMINI_RETRY_DELAYS_MS.length) {
+        throw e;
+      }
+
+      const delayMs = GEMINI_RETRY_DELAYS_MS[attempt];
+      console.warn(
+        `Gemini 暫時失敗，準備第 ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length} 次重試，等待 ${delayMs / 1000} 秒：${getErrorSummary(e)}`
+      );
+      await sleep(delayMs);
+    }
+  }
+}
+
+// —— 台灣日期字串
 function twDateStr(d = new Date()) {
   const parts = new Intl.DateTimeFormat('zh-TW', {
     timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -138,7 +185,7 @@ ${candidates}
     }]
   }];
 
-  const resp = await ai.models.generateContent({
+  const resp = await generateContentWithRetry(ai, {
     model: 'gemini-2.5-flash',
     contents: prompt,
   });
@@ -179,12 +226,22 @@ async function pushToLine(text) {
       return;
     }
 
-    const post = await buildPost(items);
+    let post;
+    try {
+      post = await buildPost(items);
+    } catch (e) {
+      if (!isRetryableGeminiError(e)) {
+        throw e;
+      }
+
+      console.error('Gemini 重試後仍暫時失敗，改送 LINE 備援訊息：', getErrorSummary(e));
+      post = buildGeminiFallbackPost();
+    }
+
     await pushToLine(post);
     console.log('✅ 已推送到群組');
   } catch (e) {
     console.error('❌ 執行失敗：', e);
-    // 若需要，也可在這裡追加：失敗備援文案 + push
     process.exit(1);
   }
 })();
